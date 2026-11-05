@@ -209,48 +209,141 @@ ZONE <span style="color:#e32636">BARBER'S</span>
 <p>© 2026 Zone Barber's. Todos los derechos reservados.</p>
 </footer>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const horarios = document.getElementById('horario');
+const SUPABASE_URL = 'https://osxhivrihjksggeulqvh.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_-30AXwP372NDjUrM1ogjQg_YLs7D59T';
 
-function cargarHorarios(){
- horarios.innerHTML='<option value="">Seleccionar horario</option>';
- for(let h=10;h<15;h++){
-  for(let m=0;m<60;m+=5){
-   if(h===14 && m>35) continue;
-   agregar(h,m);
-  }
- }
- for(let h=18;h<22;h++){
-  for(let m=0;m<60;m+=5){
-   if(h===21 && m>35) continue;
-   agregar(h,m);
-  }
- }
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const formulario = document.getElementById('formulario');
+const barbero = document.getElementById('barbero');
+const servicio = document.getElementById('servicio');
+const fecha = document.getElementById('fecha');
+const horario = document.getElementById('horario');
+
+let servicios = [];
+
+fecha.min = new Date().toLocaleDateString('en-CA');
+
+function minutos(hora) {
+  const [h, m] = hora.split(':').map(Number);
+  return h * 60 + m;
 }
-function agregar(h,m){
- const hora=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
- const op=document.createElement('option');
- op.value=hora;
- op.textContent=hora;
- horarios.appendChild(op);
+
+function formatoHora(valor) {
+  return String(Math.floor(valor / 60)).padStart(2, '0') +
+    ':' + String(valor % 60).padStart(2, '0');
 }
-cargarHorarios();
 
-document.getElementById('fecha').min =
- new Date().toLocaleDateString('en-CA');
+async function cargarDatos() {
+  const [b, s] = await Promise.all([
+    db.from('barbers').select('id,name').eq('active', true).order('id'),
+    db.from('services').select('id,name,price,duration_minutes').eq('active', true).order('id')
+  ]);
 
-document.getElementById('fecha').addEventListener('change',function(){
- const dia=new Date(this.value+'T12:00:00').getDay();
- if(dia===0){
-  alert('La barbería permanece cerrada los domingos.');
-  this.value='';
- }
+  if (b.error || s.error) {
+    alert('No se pudieron cargar los datos. Revisá la conexión.');
+    return;
+  }
+
+  barbero.innerHTML = '<option value="">Seleccionar barbero</option>';
+  b.data.forEach(item => barbero.add(new Option(item.name, item.id)));
+
+  servicios = s.data;
+  servicio.innerHTML = '<option value="">Seleccionar servicio</option>';
+
+  servicios.forEach(item => {
+    servicio.add(new Option(
+      `${item.name} - $${item.price.toLocaleString('es-AR')} - ${item.duration_minutes} min`,
+      item.id
+    ));
+  });
+}
+
+async function actualizarHorarios() {
+  horario.innerHTML = '<option value="">Seleccionar horario</option>';
+
+  if (!barbero.value || !servicio.value || !fecha.value) return;
+
+  if (new Date(fecha.value + 'T12:00:00').getDay() === 0) {
+    horario.innerHTML = '<option value="">Cerrado los domingos</option>';
+    return;
+  }
+
+  const { data, error } = await db.rpc('get_busy_slots', {
+    p_barber_id: Number(barbero.value),
+    p_date: fecha.value
+  });
+
+  if (error) {
+    horario.innerHTML = '<option value="">Error al consultar horarios</option>';
+    alert('No se pudieron consultar los horarios.');
+    return;
+  }
+
+  const elegido = servicios.find(s => s.id === Number(servicio.value));
+  const duracion = elegido.duration_minutes;
+  const ocupados = data || [];
+
+  [[600, 900], [1080, 1320]].forEach(([inicio, fin]) => {
+    for (let hora = inicio; hora + duracion <= fin; hora += 5) {
+      const termina = hora + duracion;
+
+      const ocupado = ocupados.some(t =>
+        minutos(t.start_time) < termina &&
+        minutos(t.end_time) > hora
+      );
+
+      if (!ocupado) {
+        const texto = formatoHora(hora);
+        horario.add(new Option(texto, texto));
+      }
+    }
+  });
+
+  if (horario.options.length === 1) {
+    horario.innerHTML = '<option value="">No hay horarios disponibles</option>';
+  }
+}
+
+barbero.addEventListener('change', actualizarHorarios);
+servicio.addEventListener('change', actualizarHorarios);
+fecha.addEventListener('change', actualizarHorarios);
+
+formulario.addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  if (!formulario.reportValidity()) return;
+
+  const boton = formulario.querySelector('button[type="submit"]');
+  boton.disabled = true;
+  boton.textContent = 'PROCESANDO...';
+
+  const { error } = await db.rpc('create_booking', {
+    p_barber_id: Number(barbero.value),
+    p_service_id: Number(servicio.value),
+    p_customer_name: document.getElementById('nombre').value.trim(),
+    p_customer_whatsapp: document.getElementById('whatsapp').value.trim(),
+    p_date: fecha.value,
+    p_start_time: horario.value
+  });
+
+  boton.disabled = false;
+  boton.textContent = 'CONFIRMAR RESERVA';
+
+  if (error) {
+    alert('No se pudo confirmar: ' + error.message);
+    await actualizarHorarios();
+    return;
+  }
+
+  alert('¡Tu turno fue reservado correctamente! Gracias por elegir Zone Barber\'s.');
+  formulario.reset();
+  horario.innerHTML = '<option value="">Seleccionar horario</option>';
 });
 
-document.getElementById('formulario').addEventListener('submit',function(e){
- e.preventDefault();
- alert('La página todavía está en configuración. Próximamente podrás confirmar tu turno automáticamente.');
-});
+cargarDatos();
 </script>
 
 </body>
